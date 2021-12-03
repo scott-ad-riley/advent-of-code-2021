@@ -1,19 +1,14 @@
+use std::cmp::Ordering;
+
 fn main() {
     let s = include_str!("input.txt");
     let input: Vec<&str> = s.split('\n').filter(|line| line.len() > 1).collect();
 
     let mut possible_oxygen_values = input.clone();
+    let oxygen_mode = OccurrenceMode::MostCommon;
 
     for position in 0..12 {
-        // we could also partition and then just take largest, rather than find largest + filter
-        let bit = bit_occurrences(
-            &possible_oxygen_values,
-            position,
-            OccurrenceMode::MostCommon,
-        );
-
-        possible_oxygen_values =
-            filter_lines_with_bit(possible_oxygen_values, position, dbg!(bit).to_string());
+        possible_oxygen_values = oxygen_mode.filter_by_position(&possible_oxygen_values, position);
 
         if possible_oxygen_values.len() == 1 {
             break;
@@ -21,12 +16,11 @@ fn main() {
     }
 
     let mut possible_co2_values = input;
+    let co2_mode = OccurrenceMode::LeastCommon;
 
     for position in 0..12 {
-        // we could also partition and then just take largest, rather than find largest + filter
-        let bit = bit_occurrences(&possible_co2_values, position, OccurrenceMode::LeastCommon);
-        possible_co2_values =
-            filter_lines_with_bit(possible_co2_values, position, dbg!(bit).to_string());
+        possible_co2_values = co2_mode.filter_by_position(&possible_co2_values, position);
+
         if possible_co2_values.len() == 1 {
             break;
         }
@@ -50,46 +44,28 @@ enum OccurrenceMode {
 }
 
 impl OccurrenceMode {
-    pub fn for_val(&self, value: i32) -> char {
+    fn default(&self) -> &str {
         use OccurrenceMode::*;
-        if value == 0 {
-            return match self {
-                MostCommon => '1',
-                LeastCommon => '0',
-            };
-        }
-        match (self, value > 0) {
-            (MostCommon, true) | (LeastCommon, false) => '1',
-            (MostCommon, false) | (LeastCommon, true) => '0',
-        }
-    }
-}
-
-fn bit_occurrences(lines: &[&str], position: usize, mode: OccurrenceMode) -> char {
-    let mut counter = 0;
-
-    for line in lines {
-        match str_at(line, position).unwrap() {
-            "0" => {
-                counter -= 1;
-            }
-            "1" => {
-                counter += 1;
-            }
-            not_a_bit => panic!("Expected a 1 or 0, got: {:?}", not_a_bit),
+        match self {
+            MostCommon => "1",
+            LeastCommon => "0",
         }
     }
 
-    mode.for_val(counter)
-}
+    pub fn filter_by_position<'a>(&self, lines: &[&'a str], position: usize) -> Vec<&'a str> {
+        let partitioned: (Vec<&str>, Vec<&str>) = lines
+            .iter()
+            .partition(|line| str_at(line, position) == Some(self.default()));
 
-// rewrite to avoid extra allocation/don't collect
-fn filter_lines_with_bit(lines: Vec<&str>, position: usize, bit: String) -> Vec<&str> {
-    lines
-        .iter()
-        .filter(|line| str_at(line, position) == Some(bit.as_str()))
-        .copied()
-        .collect()
+        use OccurrenceMode::*;
+        use Ordering::*;
+        // return the partition which is largest, defaulting to the first if the same length
+        match (self, partitioned.0.len().cmp(&partitioned.1.len())) {
+            (_, Equal) => partitioned.0,
+            (MostCommon, Greater) | (LeastCommon, Less) => partitioned.0,
+            (MostCommon, Less) | (LeastCommon, Greater) => partitioned.1,
+        }
+    }
 }
 
 fn str_at(string: &str, pos: usize) -> Option<&str> {

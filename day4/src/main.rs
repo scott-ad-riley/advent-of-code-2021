@@ -26,34 +26,31 @@ fn main() {
         .collect();
 
     let mut boards: Vec<Board> = board_strings.chunks(25).map(Board::create).collect();
-    let mut winning_board = None;
+    let mut board_counter = 1;
 
     for score in scores {
-        if winning_board.is_some() {
-            break;
-        }
-
         for board in boards.iter_mut() {
+            if board.already_won() {
+                continue;
+            }
             board.score_tile(score);
         }
 
-        for board in boards.iter() {
-            if board.board_won() {
-                println!(
-                    "Board Won!: \n{}\nScore: {} on number {}",
-                    board,
-                    board.score_board(score),
-                    score
-                );
-                winning_board = Some(board.clone());
+        for board in boards.iter_mut() {
+            if !board.already_won() && board.board_won() {
+                board.record_win(board_counter);
+                if board_counter == 100 {
+                    println!(
+                        "Board Won!: \n{}\nScore: {} on number {}",
+                        board,
+                        board.score_board(score),
+                        score
+                    );
+                }
+                board_counter += 1;
             }
         }
     }
-
-    // useful for debugging
-    // for board in boards.iter() {
-    //     println!("Other Board:\n{}", board);
-    // }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -90,12 +87,14 @@ impl fmt::Display for Tile {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct Board {
+    winner_position: Option<usize>,
     rows: Vec<Vec<Tile>>,
 }
 
 impl Board {
     pub fn create(input: &[&str]) -> Self {
         Self {
+            winner_position: None,
             rows: input
                 .chunks(5)
                 .map(|board_row| {
@@ -124,7 +123,7 @@ impl Board {
             return true;
         }
 
-        for column in 0..4 {
+        for column in 0..5 {
             let column_count = self
                 .rows
                 .iter()
@@ -138,6 +137,14 @@ impl Board {
         }
 
         false
+    }
+
+    fn record_win(&mut self, position: usize) {
+        self.winner_position = Some(position);
+    }
+
+    fn already_won(&self) -> bool {
+        self.winner_position.is_some()
     }
 
     fn score_board(&self, winning_number: usize) -> usize {
@@ -156,6 +163,8 @@ impl Board {
 
 impl fmt::Display for Board {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "Board(position={:?})", self.winner_position)?;
+
         for row in self.rows.iter() {
             for tile in row {
                 write!(f, "{}", tile)?;

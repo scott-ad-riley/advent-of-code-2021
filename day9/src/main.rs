@@ -1,4 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 const DIRECTIONS: &[Direction] = &[
     Direction::Above,
@@ -8,7 +12,7 @@ const DIRECTIONS: &[Direction] = &[
 ];
 
 fn main() {
-    let s = include_str!("test_input.txt");
+    let s = include_str!("input.txt");
 
     let lines: Vec<Vec<usize>> = s
         .split('\n')
@@ -22,10 +26,23 @@ fn main() {
         .collect();
     let mut map = Map::new(lines);
     map.create_basins();
+
+    let mut basins: Vec<HashSet<Point>> = map
+        .basins
+        .into_inner()
+        .into_iter()
+        .map(|(_, points)| points)
+        .collect();
+
+    basins.sort_by_key(|a| a.len());
+    basins.reverse();
+
+    println!("{}", basins[0].len() * basins[1].len() * basins[2].len());
 }
 
 type Point = (usize, usize);
 type BasinId = i32;
+#[derive(Debug)]
 enum Direction {
     Above,
     Below,
@@ -54,10 +71,12 @@ impl Direction {
         }
     }
 }
+
+#[derive(Debug)]
 struct Map {
     data: Vec<Vec<usize>>,
-    basins: HashMap<BasinId, HashSet<Point>>,
-    in_basin: Vec<Vec<Option<BasinId>>>,
+    basins: RefCell<HashMap<BasinId, HashSet<Point>>>,
+    in_basin: RefCell<Vec<Vec<Option<BasinId>>>>,
 }
 
 impl Map {
@@ -67,9 +86,9 @@ impl Map {
             .map(|row| row.iter().map(|_| None).collect::<Vec<Option<BasinId>>>())
             .collect();
         Self {
-            in_basin,
+            in_basin: RefCell::new(in_basin),
             data: input,
-            basins: HashMap::new(),
+            basins: RefCell::new(HashMap::new()),
         }
     }
 
@@ -84,34 +103,49 @@ impl Map {
                     let adjacents = self.adjacents_in_basins((row_pos, col_pos));
                     match adjacents.len() {
                         0 => {
-                            self.basins.insert(
+                            self.basins.borrow_mut().insert(
                                 basin_id,
                                 HashSet::from_iter(vec![(row_pos, col_pos)].into_iter()),
                             );
-                            self.in_basin[row_pos][col_pos] = Some(basin_id);
+                            self.in_basin.borrow_mut()[row_pos][col_pos] = Some(basin_id);
+                            basin_id += 1;
                         }
                         1 => {
                             // we're in a basin already, either to the left or above
                             let basin_id = adjacents.first().unwrap().1;
-                            self.basins.entry(basin_id).and_modify(|entry| {
-                                entry.insert((row_pos, col_pos));
-                            });
-                            self.in_basin[row_pos][col_pos] = Some(basin_id);
+                            self.basins
+                                .borrow_mut()
+                                .entry(basin_id)
+                                .and_modify(|entry| {
+                                    entry.insert((row_pos, col_pos));
+                                });
+                            self.in_basin.borrow_mut()[row_pos][col_pos] = Some(basin_id);
                         }
                         2 => {
                             // we may have just hit another basin, check if they're both the same - if so merge basins
                             let basin_id_to_merge_into = adjacents.first().unwrap().1;
                             let basin_id_to_merge_from = adjacents.get(1).unwrap().1;
+
                             if basin_id_to_merge_from == basin_id_to_merge_into {
                                 self.basins
+                                    .borrow_mut()
                                     .entry(basin_id_to_merge_into)
                                     .and_modify(|entry| {
                                         entry.insert((row_pos, col_pos));
                                     });
-                                self.in_basin[row_pos][col_pos] = Some(basin_id_to_merge_into);
+                                self.in_basin.borrow_mut()[row_pos][col_pos] =
+                                    Some(basin_id_to_merge_into);
                             } else {
                                 // merge basins
-                                self.merge_basins()
+                                self.merge_basins(basin_id_to_merge_into, basin_id_to_merge_from);
+                                self.basins
+                                    .borrow_mut()
+                                    .entry(basin_id_to_merge_into)
+                                    .and_modify(|entry| {
+                                        entry.insert((row_pos, col_pos));
+                                    });
+                                self.in_basin.borrow_mut()[row_pos][col_pos] =
+                                    Some(basin_id_to_merge_into);
                             }
                         }
                         _ => panic!(
@@ -123,16 +157,37 @@ impl Map {
         }
     }
 
-    fn merge_basins(&mut self) {}
+    fn merge_basins(&self, target: BasinId, source: BasinId) {
+        let points: Vec<(usize, usize)> = self
+            .basins
+            .borrow()
+            .get(&source)
+            .unwrap()
+            .iter()
+            .copied()
+            .collect();
+
+        self.basins
+            .borrow_mut()
+            .entry(target)
+            .and_modify(|target_basin| {
+                for point in points.iter() {
+                    target_basin.insert(*point);
+                }
+            });
+
+        for point in points {
+            self.in_basin.borrow_mut()[point.0][point.1] = Some(target)
+        }
+
+        self.basins.borrow_mut().remove(&source);
+    }
 
     fn adjacents_in_basins(&self, point: Point) -> Vec<(Point, BasinId)> {
         let mut adjacents: Vec<(Point, BasinId)> = DIRECTIONS
             .iter()
             .map(|direction| self.basin_at(point, direction))
-            .filter(|x| match x {
-                (Some(_), Some(_)) => todo!(),
-                _ => false,
-            })
+            .filter(|x| matches!(x, (Some(_), Some(_))))
             .map(|(x, y)| (x.unwrap(), y.unwrap()))
             .collect();
 
@@ -142,12 +197,31 @@ impl Map {
     }
 
     fn basin_at(&self, point: Point, direction: &Direction) -> (Option<Point>, Option<BasinId>) {
-        let max_rows = (self.data.first().unwrap().len() - 1) as isize;
-        let max_cols = (self.data.len() - 1) as isize;
+        let max_rows = (self.data.len() - 1) as isize;
+        let max_cols = (self.data.first().unwrap().len() - 1) as isize;
 
         match direction.apply(point, max_rows, max_cols) {
-            Some(new_point) => (Some(new_point), self.in_basin[new_point.0][new_point.1]),
+            Some(new_point) => (
+                Some(new_point),
+                self.in_basin.borrow()[new_point.0][new_point.1],
+            ),
             None => (None, None),
         }
+    }
+}
+
+impl fmt::Display for Map {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for basin_ids in self.in_basin.borrow().iter() {
+            for col in basin_ids {
+                match col {
+                    Some(basin_id) => write!(f, "{:3}", basin_id)?,
+                    None => write!(f, "{:3}", "  *")?,
+                }
+            }
+            writeln!(f)?;
+        }
+
+        writeln!(f)
     }
 }
